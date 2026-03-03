@@ -68,6 +68,8 @@ const LAYOUT = {
   laneHeaderWidth: 30,
   laneHeight: 180,
   poolGap: 30,
+  minPoolWidth: 600,
+  poolContentPadding: 50,
 };
 
 /**
@@ -407,7 +409,7 @@ function computePoolLayout(data) {
     const contentStartX = poolStartX + poolHeaderWidth + (hasLanes ? laneHeaderWidth : 0);
 
     // Pool/lane dimensions
-    const poolContentWidth = (maxCol + 1) * stepX + 50;
+    const poolContentWidth = (maxCol + 1) * stepX + LAYOUT.poolContentPadding;
     const poolWidth = poolHeaderWidth + (hasLanes ? laneHeaderWidth : 0) + poolContentWidth;
     const poolHeight = hasLanes ? lanes.length * laneHeight : laneHeight;
 
@@ -451,7 +453,7 @@ function computePoolLayout(data) {
   }
 
   // Normalise all pool widths to the widest pool for a uniform appearance
-  const maxWidth = Math.max(...poolShapes.map((ps) => ps.width), 600);
+  const maxWidth = Math.max(...poolShapes.map((ps) => ps.width), LAYOUT.minPoolWidth);
   for (const ps of poolShapes) {
     ps.width = maxWidth;
     for (const ls of ps.laneShapes) {

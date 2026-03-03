@@ -710,15 +710,16 @@ describe('generate() – pools and lanes', () => {
 
   test('elements in the same lane share the same Y coordinate', () => {
     const xml = generate(POOL_DATA);
-    // start1 and task1 are both in lane1
+    // start1 (eventSize=36) and task1 (elementHeight=80) are both in lane1
+    // Both are vertically centred in lane1: y = laneY + laneHeight/2 - height/2
+    // Their vertical centres (y + height/2) must be identical.
     const yStart = getShapeY(xml, 'start1');
     const yTask1 = getShapeY(xml, 'task1');
     expect(yStart).not.toBeNull();
     expect(yTask1).not.toBeNull();
-    // Both centred in lane1 (same band) — their tops must be equal despite different sizes
-    // start1 (eventSize=36) and task1 (elementHeight=80) share a band centred at the same Y
-    // Verify they are within the same lane band (difference < laneHeight=180)
-    expect(Math.abs(yTask1 - yStart)).toBeLessThan(180);
+    const centreStart = yStart + 36 / 2;  // eventSize / 2
+    const centreTask1 = yTask1 + 80 / 2;  // elementHeight / 2
+    expect(centreStart).toBe(centreTask1);
   });
 
   test('pool without lanes generates pool shape but no lane shapes', () => {
