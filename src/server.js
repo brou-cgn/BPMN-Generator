@@ -44,10 +44,8 @@ app.post('/api/generate', (req, res) => {
   }
 });
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`BPMN Generator server running on http://localhost:${PORT}`);
-  });
-}
+app.listen(PORT, () => {
+  console.log(`BPMN Generator server running on http://localhost:${PORT}`);
+});
 
 module.exports = app;
