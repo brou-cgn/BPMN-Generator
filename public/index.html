@@ -4,7 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BPMN Generator</title>
-  <script src="/vendor/bpmn-js/bpmn-viewer.production.min.js"></script>
+  <link rel="stylesheet" href="/vendor/bpmn-js/assets/diagram-js.css" />
+  <link rel="stylesheet" href="/vendor/bpmn-js/assets/bpmn-js.css" />
+  <script src="/vendor/bpmn-js/bpmn-modeler.production.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -238,6 +240,7 @@
     <span class="strip-label">Funktionen:</span>
     <span class="chip">🔄 JSON → BPMN 2.0 XML</span>
     <span class="chip">🖥 Live-Vorschau (bpmn.io)</span>
+    <span class="chip">↕ Drag &amp; Drop</span>
     <span class="chip">⬇ BPMN-Download</span>
     <span class="chip">8 Element-Typen</span>
   </div>
@@ -320,8 +323,8 @@
       ]
     };
 
-    /* ── bpmn-js viewer ───────────────────────────────────── */
-    const viewer = new BpmnJS({ container: '#canvas' });
+    /* ── bpmn-js modeler (enables drag & drop) ───────────── */
+    const modeler = new BpmnJS({ container: '#canvas' });
     let lastBpmnXml = null;
 
     const inputJson   = document.getElementById('inputJson');
@@ -399,8 +402,8 @@
         }
 
         const xml = await res.text();
-        await viewer.importXML(xml);
-        viewer.get('canvas').zoom('fit-viewport');
+        await modeler.importXML(xml);
+        modeler.get('canvas').zoom('fit-viewport');
         placeholder.style.display = 'none';
         lastBpmnXml = xml;
         downloadBtn.disabled = false;
@@ -416,9 +419,16 @@
       clearError();
     });
 
-    document.getElementById('downloadBtn').addEventListener('click', () => {
+    document.getElementById('downloadBtn').addEventListener('click', async () => {
       if (!lastBpmnXml) return;
-      const blob = new Blob([lastBpmnXml], { type: 'application/xml' });
+      let xml = lastBpmnXml;
+      try {
+        const result = await modeler.saveXML({ format: true });
+        xml = result.xml;
+      } catch (e) {
+        // fall back to last generated XML if saveXML fails
+      }
+      const blob = new Blob([xml], { type: 'application/xml' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href     = url;
