@@ -442,6 +442,14 @@
       errorBox.style.display = 'none';
       errorBox.textContent   = '';
     }
+    async function parseErrorResponse(res) {
+      try {
+        const err = await res.json();
+        return err.error || 'Unbekannter Fehler';
+      } catch {
+        return `HTTP ${res.status}`;
+      }
+    }
 
     /* ── Generate diagram ─────────────────────────────────── */
     async function generate() {
@@ -462,8 +470,7 @@
         });
 
         if (!res.ok) {
-          const err = await res.json();
-          showError(err.error || 'Unbekannter Fehler');
+          showError(await parseErrorResponse(res));
           return;
         }
 
@@ -543,8 +550,7 @@
           body: JSON.stringify({ data: currentData, elementId: pendingElementId, newType }),
         });
         if (!res.ok) {
-          const err = await res.json();
-          showError(err.error || 'Unbekannter Fehler');
+          showError(await parseErrorResponse(res));
           hideTypeSelector();
           return;
         }
