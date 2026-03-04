@@ -55,12 +55,14 @@ const EVENT_DEFINITIONS = {
 const LAYOUT = {
   startX: 150,
   startY: 250,
-  stepX: 150,
+  stepX: 180,
+  stepXEnhanced: 252,
+  stepXParallel: 234,
   elementWidth: 100,
   elementHeight: 80,
   gatewaySize: 50,
   eventSize: 36,
-  laneSpacing: 120,
+  laneSpacing: 140,
   // Pool and lane layout constants
   poolStartX: 130,
   poolStartY: 80,
@@ -288,14 +290,31 @@ function computeLayout(elements, flows = []) {
   }
 
   // Compute positions from column and row
+  // First pass: Set Y-coordinates and temporary X-coordinates
   for (const el of elements) {
     const isGateway = el.type.toLowerCase().includes('gateway');
     const isEvent = el.type.endsWith('Event');
     const width = isGateway ? LAYOUT.gatewaySize : isEvent ? LAYOUT.eventSize : LAYOUT.elementWidth;
     const height = isGateway ? LAYOUT.gatewaySize : isEvent ? LAYOUT.eventSize : LAYOUT.elementHeight;
-    const x = LAYOUT.startX + col.get(el.id) * LAYOUT.stepX;
     const y = LAYOUT.startY + row.get(el.id) * LAYOUT.laneSpacing - height / 2;
-    positions.set(el.id, { x, y, width, height });
+    positions.set(el.id, { x: 0, y, width, height });  // Temporary X
+  }
+
+  // Compute adaptive column widths based on Y-differences
+  const columnWidths = computeAdaptiveColumnWidths(elements, flows, col, positions);
+
+  // Second pass: Set final X-coordinates with adaptive spacing
+  for (const el of elements) {
+    const pos = positions.get(el.id);
+    const elCol = col.get(el.id);
+    let x = LAYOUT.startX;
+
+    // Sum up all column widths up to this element's column
+    for (let c = 0; c < elCol; c++) {
+      x += columnWidths.get(c) || LAYOUT.stepX;
+    }
+
+    pos.x = x;
   }
 
   return positions;
@@ -473,6 +492,60 @@ function computeColumns(elements, flows) {
 }
 
 /**
+ * Computes adaptive column widths based on Y-coordinate differences between
+ * connected elements. Returns a map of column index → width in pixels.
+ *
+ * @param {Array} elements - Process elements
+ * @param {Array} flows - Sequence flows
+ * @param {Map} col - Column assignments (element id → column index)
+ * @param {Map} positions - Element positions (for Y-coordinates)
+ * @returns {Map<number, number>} column index → width in pixels
+ */
+function computeAdaptiveColumnWidths(elements, flows, col, positions) {
+  const outEdges = new Map(elements.map((el) => [el.id, []]));
+  for (const flow of flows) {
+    if (outEdges.has(flow.source)) {
+      outEdges.get(flow.source).push(flow.target);
+    }
+  }
+
+  // Determine max Y-difference for each column transition
+  const maxYDiffPerCol = new Map();
+
+  for (const el of elements) {
+    const elCol = col.get(el.id);
+    const targets = outEdges.get(el.id) || [];
+
+    for (const targetId of targets) {
+      const targetCol = col.get(targetId);
+      if (targetCol > elCol) {
+        const srcPos = positions.get(el.id);
+        const tgtPos = positions.get(targetId);
+        if (srcPos && tgtPos) {
+          const yDiff = Math.abs(srcPos.y - tgtPos.y);
+          const current = maxYDiffPerCol.get(elCol) || 0;
+          maxYDiffPerCol.set(elCol, Math.max(current, yDiff));
+        }
+      }
+    }
+  }
+
+  // Assign width based on Y-difference
+  const columnWidths = new Map();
+  for (const [colIdx, yDiff] of maxYDiffPerCol) {
+    if (yDiff > 100) {
+      columnWidths.set(colIdx, LAYOUT.stepXEnhanced);  // 252px for large differences
+    } else if (yDiff > 40) {
+      columnWidths.set(colIdx, LAYOUT.stepXParallel);  // 234px for medium differences
+    } else {
+      columnWidths.set(colIdx, LAYOUT.stepX);  // 180px default
+    }
+  }
+
+  return columnWidths;
+}
+
+/**
  * Computes layout positions for a pool-based process (with collaboration,
  * pools, and lanes). Each pool's elements are positioned within their
  * respective lane's Y band; columns are assigned by topological order within
@@ -535,25 +608,45 @@ function computePoolLayout(data) {
     const contentStartX = poolStartX + poolHeaderWidth + (hasLanes ? laneHeaderWidth : 0);
 
     // Pool/lane dimensions
-    const poolContentWidth = (maxCol + 1) * stepX + LAYOUT.poolContentPadding;
-    const poolWidth = poolHeaderWidth + (hasLanes ? laneHeaderWidth : 0) + poolContentWidth;
-    const poolHeight = hasLanes ? lanes.length * laneHeight : laneHeight;
-
     // Lane Y positions
     const laneYMap = new Map();
     lanes.forEach((lane, i) => laneYMap.set(lane.id, currentY + i * laneHeight));
 
     // Position each element centred vertically within its lane band
+    // First pass: Set Y-coordinates and temporary positions
     for (const el of poolElements) {
       const isGateway = el.type.toLowerCase().includes('gateway');
       const isEvent = el.type.endsWith('Event');
       const width = isGateway ? LAYOUT.gatewaySize : isEvent ? LAYOUT.eventSize : LAYOUT.elementWidth;
       const height = isGateway ? LAYOUT.gatewaySize : isEvent ? LAYOUT.eventSize : LAYOUT.elementHeight;
-      const x = contentStartX + col.get(el.id) * stepX;
       const bandY = (el.laneRef && laneYMap.has(el.laneRef)) ? laneYMap.get(el.laneRef) : currentY;
       const y = bandY + laneHeight / 2 - height / 2;
-      positions.set(el.id, { x, y, width, height });
+      positions.set(el.id, { x: 0, y, width, height });  // Temporary X
     }
+
+    // Compute adaptive column widths for this pool
+    const columnWidths = computeAdaptiveColumnWidths(poolElements, poolFlows, col, positions);
+
+    // Second pass: Set final X-coordinates with adaptive spacing
+    for (const el of poolElements) {
+      const pos = positions.get(el.id);
+      const elCol = col.get(el.id);
+      let x = contentStartX;
+
+      for (let c = 0; c < elCol; c++) {
+        x += columnWidths.get(c) || stepX;
+      }
+
+      pos.x = x;
+    }
+
+    // Calculate total pool width using adaptive column widths
+    let poolContentWidth = LAYOUT.poolContentPadding;
+    for (let c = 0; c <= maxCol; c++) {
+      poolContentWidth += columnWidths.get(c) || stepX;
+    }
+    const poolWidth = poolHeaderWidth + (hasLanes ? laneHeaderWidth : 0) + poolContentWidth;
+    const poolHeight = hasLanes ? lanes.length * laneHeight : laneHeight;
 
     // Lane shape descriptors
     const laneShapes = lanes.map((lane, i) => ({
