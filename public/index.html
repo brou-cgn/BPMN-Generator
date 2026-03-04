@@ -188,6 +188,10 @@
     #downloadBtn:hover { background: #2d8f47; }
     #downloadBtn:disabled { background: #ccc; cursor: default; }
 
+    #downloadSvgBtn { background: #f57c00; color: white; }
+    #downloadSvgBtn:hover { background: #e65100; }
+    #downloadSvgBtn:disabled { background: #ccc; cursor: default; }
+
     .error-box {
       margin-top: 8px;
       padding: 8px 10px;
@@ -289,6 +293,7 @@
     <span class="chip">↕ Drag &amp; Drop</span>
     <span class="chip">✏ Typ ändern</span>
     <span class="chip">⬇ BPMN-Download</span>
+    <span class="chip">⬇ SVG-Export</span>
     <span class="chip">21 Element-Typen</span>
   </div>
 
@@ -304,6 +309,7 @@
         <button id="generateBtn">▶ Diagramm erzeugen</button>
         <button id="resetBtn">↺ Beispiel laden</button>
         <button id="downloadBtn" disabled>⬇ BPMN herunterladen</button>
+        <button id="downloadSvgBtn" disabled>⬇ SVG herunterladen</button>
       </div>
       <div id="errorBox" class="error-box" role="alert"></div>
 
@@ -419,10 +425,11 @@
     const modeler = new BpmnJS({ container: '#canvas' });
     let lastBpmnXml = null;
 
-    const inputJson   = document.getElementById('inputJson');
-    const errorBox    = document.getElementById('errorBox');
-    const placeholder = document.getElementById('placeholder');
-    const downloadBtn = document.getElementById('downloadBtn');
+    const inputJson      = document.getElementById('inputJson');
+    const errorBox       = document.getElementById('errorBox');
+    const placeholder    = document.getElementById('placeholder');
+    const downloadBtn    = document.getElementById('downloadBtn');
+    const downloadSvgBtn = document.getElementById('downloadSvgBtn');
 
     /* ── API status check ─────────────────────────────────── */
     async function checkApiStatus() {
@@ -506,6 +513,7 @@
         placeholder.style.display = 'none';
         lastBpmnXml = xml;
         downloadBtn.disabled = false;
+        downloadSvgBtn.disabled = false;
       } catch (e) {
         showError('Fehler beim Erzeugen des Diagramms: ' + e.message);
       }
@@ -630,6 +638,22 @@
       a.download = 'diagram.bpmn';
       a.click();
       URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('downloadSvgBtn').addEventListener('click', async () => {
+      if (!lastBpmnXml) return;
+      try {
+        const { svg } = await modeler.saveSVG();
+        const blob = new Blob([svg], { type: 'image/svg+xml' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'diagram.svg';
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        showError('Fehler beim Exportieren als SVG: ' + e.message);
+      }
     });
 
     /* ── Load example on startup ──────────────────────────── */
