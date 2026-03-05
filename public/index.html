@@ -973,9 +973,14 @@
       }
       try {
         const elementRegistry = modeler.get('elementRegistry');
-        const updatedElements = data.elements.map((el) => {
+        const originalIds = new Set(data.elements.map((el) => el.id));
+        const MERGE_SUFFIX = '_merge';
+
+        // Update positions of existing elements; remove those deleted in the modeler.
+        let updatedElements = data.elements.map((el) => {
           const shape = elementRegistry.get(el.id);
-          if (shape && shape.x !== undefined && shape.y !== undefined &&
+          if (!shape) return null; // Element was removed in the modeler
+          if (shape.x !== undefined && shape.y !== undefined &&
               shape.width !== undefined && shape.height !== undefined) {
             return {
               ...el,
@@ -986,9 +991,32 @@
             };
           }
           return el;
+        }).filter(Boolean);
+
+        // Add elements that were newly added via the modeler (not in the original
+        // JSON and not auto-generated merge gateways, which have the form "<id>_merge").
+        elementRegistry.filter((el) => !el.waypoints && el.id !== '__implicitroot').forEach((shape) => {
+          if (!originalIds.has(shape.id)) {
+            const isAutoMerge = shape.id.endsWith(MERGE_SUFFIX) &&
+                                originalIds.has(shape.id.slice(0, -MERGE_SUFFIX.length));
+            if (!isAutoMerge) {
+              const jsonType = BPMNJS_TYPE_MAP[shape.type];
+              if (jsonType) {
+                updatedElements.push({
+                  id: shape.id,
+                  type: jsonType,
+                  name: (shape.businessObject && shape.businessObject.name) || '',
+                  x: Math.round(shape.x),
+                  y: Math.round(shape.y),
+                  width:  Math.round(shape.width),
+                  height: Math.round(shape.height),
+                });
+                originalIds.add(shape.id);
+              }
+            }
+          }
         });
-        const originalIds = new Set(data.elements.map((el) => el.id));
-        const MERGE_SUFFIX = '_merge';
+
         // Resolves an element id back to an original element id.
         // Auto-inserted merge gateways have ids of the form "<originalId>_merge";
         // this function strips that suffix so saved flows reference original elements.
