@@ -1061,6 +1061,123 @@ describe('orthogonal flow routing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Parallel flow deconfliction
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: returns all horizontal segments from a waypoint array.
+ * Each segment is {y, xMin, xMax}.
+ */
+function getHorizontalSegments(waypoints) {
+  const segs = [];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    if (waypoints[i].y === waypoints[i + 1].y) {
+      segs.push({
+        y: waypoints[i].y,
+        xMin: Math.min(waypoints[i].x, waypoints[i + 1].x),
+        xMax: Math.max(waypoints[i].x, waypoints[i + 1].x),
+      });
+    }
+  }
+  return segs;
+}
+
+/**
+ * Returns true if two horizontal segments overlap (same Y, overlapping X range).
+ */
+function segmentsOverlap(a, b) {
+  return a.y === b.y && a.xMin < b.xMax && b.xMin < a.xMax;
+}
+
+describe('parallel flow deconfliction', () => {
+  // Two parallel branches from gw1 → taskA / taskB → gw2 (join)
+  const PARALLEL_JOIN_DATA = {
+    name: 'Parallel Join',
+    elements: [
+      { id: 'start1', type: 'startEvent',      name: 'Start' },
+      { id: 'gw1',    type: 'parallelGateway', name: 'Split' },
+      { id: 'taskA',  type: 'task',            name: 'Task A' },
+      { id: 'taskB',  type: 'task',            name: 'Task B' },
+      { id: 'gw2',    type: 'parallelGateway', name: 'Join'  },
+      { id: 'end1',   type: 'endEvent',        name: 'End'   },
+    ],
+    flows: [
+      { id: 'f1', source: 'start1', target: 'gw1'   },
+      { id: 'f2', source: 'gw1',   target: 'taskA'  },
+      { id: 'f3', source: 'gw1',   target: 'taskB'  },
+      { id: 'f4', source: 'taskA', target: 'gw2'    },
+      { id: 'f5', source: 'taskB', target: 'gw2'    },
+      { id: 'f6', source: 'gw2',   target: 'end1'   },
+    ],
+  };
+
+  test('parallel flows converging at same target have no overlapping horizontal segments', () => {
+    const xml = generate(PARALLEL_JOIN_DATA);
+    const wp4 = getEdgeWaypoints(xml, 'f4');
+    const wp5 = getEdgeWaypoints(xml, 'f5');
+    expect(wp4).not.toBeNull();
+    expect(wp5).not.toBeNull();
+
+    const segs4 = getHorizontalSegments(wp4);
+    const segs5 = getHorizontalSegments(wp5);
+
+    // No horizontal segment of f4 may overlap with any horizontal segment of f5
+    for (const s4 of segs4) {
+      for (const s5 of segs5) {
+        expect(segmentsOverlap(s4, s5)).toBe(false);
+      }
+    }
+  });
+
+  test('deconflicted parallel flow horizontal segments differ by at least one task height', () => {
+    const xml = generate(PARALLEL_JOIN_DATA);
+    const wp4 = getEdgeWaypoints(xml, 'f4');
+    const wp5 = getEdgeWaypoints(xml, 'f5');
+    expect(wp4).not.toBeNull();
+    expect(wp5).not.toBeNull();
+
+    const segs4 = getHorizontalSegments(wp4);
+    const segs5 = getHorizontalSegments(wp5);
+
+    // For every pair of horizontal segments in the two flows that share
+    // overlapping X ranges but differ in Y, the Y difference must be ≥ 80 px.
+    const TASK_HEIGHT = 80;
+    for (const s4 of segs4) {
+      for (const s5 of segs5) {
+        if (s4.y !== s5.y && s4.xMin < s5.xMax && s5.xMin < s4.xMax) {
+          expect(Math.abs(s4.y - s5.y)).toBeGreaterThanOrEqual(TASK_HEIGHT);
+        }
+      }
+    }
+  });
+
+  test('deconflicted waypoints still use only right-angle bends', () => {
+    const xml = generate(PARALLEL_JOIN_DATA);
+    // Verify every consecutive triple of waypoints forms a right-angle bend
+    // (no diagonal segments): each segment must be purely horizontal or vertical.
+    ['f4', 'f5'].forEach((fid) => {
+      const wp = getEdgeWaypoints(xml, fid);
+      expect(wp).not.toBeNull();
+      for (let i = 0; i < wp.length - 1; i++) {
+        const dx = Math.abs(wp[i + 1].x - wp[i].x);
+        const dy = Math.abs(wp[i + 1].y - wp[i].y);
+        // Each segment must be purely horizontal (dy=0) or purely vertical (dx=0)
+        expect(dx === 0 || dy === 0).toBe(true);
+      }
+    });
+  });
+
+  test('sequential (non-parallel) flows are not affected by deconfliction', () => {
+    // A simple linear process should produce the same number of waypoints as before
+    const xml = generate(MINIMAL_DATA);
+    const wp = getEdgeWaypoints(xml, 'flow1');
+    expect(wp).not.toBeNull();
+    // Linear flow: same Y → exactly 2 waypoints (no detour needed)
+    expect(wp).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Flow-Merge Gateway Enhancement
 // ---------------------------------------------------------------------------
 
