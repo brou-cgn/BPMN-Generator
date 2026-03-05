@@ -484,6 +484,104 @@ function computeFlowWaypoints(srcPos, tgtPos, corner = 'right') {
 }
 
 /**
+ * Detects and resolves overlapping horizontal flow segments by rerouting
+ * secondary flows via a perpendicular detour of at least LAYOUT.elementHeight
+ * pixels, using right-angle corners.
+ *
+ * When two flows share the same horizontal path segment (same Y, overlapping
+ * X range), the flow with more waypoints (the "secondary" flow) is rerouted so
+ * its overlapping segment is offset by LAYOUT.elementHeight in the Y direction
+ * – away from the target, toward the source.  The detour uses two additional
+ * right-angle bends so the approach to the target remains orthogonal.
+ *
+ * @param {Array<{id: string, waypoints: Array<[number,number]>}>} flows
+ * @returns {Map<string, Array<[number,number]>>} flow id → resolved waypoints
+ */
+function resolveParallelFlowConflicts(flows) {
+  const waypointMap = new Map(flows.map((f) => [f.id, f.waypoints.slice()]));
+
+  /** Returns all horizontal segments of a waypoint array. */
+  function getHorizSegs(waypoints) {
+    const segs = [];
+    for (let i = 0; i < waypoints.length - 1; i++) {
+      const [x1, y1] = waypoints[i];
+      const [x2, y2] = waypoints[i + 1];
+      if (y1 === y2) {
+        segs.push({ segIdx: i, y: y1, xMin: Math.min(x1, x2), xMax: Math.max(x1, x2) });
+      }
+    }
+    return segs;
+  }
+
+  const ids = flows.map((f) => f.id);
+  const detourOffset = LAYOUT.elementHeight; // 80 px – one full task height
+
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const idA = ids[i];
+      const idB = ids[j];
+      // Always read the current (possibly already modified) waypoints
+      const wpA = waypointMap.get(idA);
+      const wpB = waypointMap.get(idB);
+      const segsA = getHorizSegs(wpA);
+      const segsB = getHorizSegs(wpB);
+
+      for (const sA of segsA) {
+        let fixed = false;
+        for (const sB of segsB) {
+          if (sA.y !== sB.y) continue;
+          if (sA.xMin >= sB.xMax || sB.xMin >= sA.xMax) continue; // no overlap
+
+          // Determine which flow to reroute: prefer the one with more waypoints
+          // (simpler / shorter paths stay unchanged).  Use flow-id alphabetic
+          // order as a stable tiebreaker when both have the same waypoint count.
+          // Never reroute a flow's first segment (segIdx === 0) because that
+          // would move the source-boundary exit point off the element boundary.
+          const aIsSecondary =
+            wpA.length > wpB.length || (wpA.length === wpB.length && idA > idB);
+          let toOffsetId = aIsSecondary ? idA : idB;
+          let seg = toOffsetId === idA ? sA : sB;
+
+          if (seg.segIdx === 0) {
+            // Can't reroute at the source exit; try the other flow instead.
+            toOffsetId = toOffsetId === idA ? idB : idA;
+            seg = toOffsetId === idA ? sA : sB;
+            if (seg.segIdx === 0) break; // Both at source exit – skip this pair
+          }
+
+          const wp = waypointMap.get(toOffsetId).slice();
+          const srcY = wp[0][1];
+          // Offset in the direction of the source so the detour runs between
+          // source and target (srcY > seg.y means source is below the segment
+          // in screen coordinates, so we add a positive offset toward srcY).
+          const dy = srcY > seg.y ? detourOffset : -detourOffset;
+          const k = seg.segIdx;
+          const [x1, y] = wp[k];
+          const [x2] = wp[k + 1];
+
+          // Reroute: replace the overlapping horizontal segment with a detour:
+          //   (x1, y+dy)  — modified wp[k]: vertical predecessor now ends here
+          //   (x2, y+dy)  — new intermediate: horizontal leg at offset level
+          //   (x2, y)     — wp[k+1] kept: vertical approach to the target
+          const newWp = [
+            ...wp.slice(0, k),
+            [x1, y + dy],
+            [x2, y + dy],
+            ...wp.slice(k + 1),
+          ];
+          waypointMap.set(toOffsetId, newWp);
+          fixed = true;
+          break;
+        }
+        if (fixed) break;
+      }
+    }
+  }
+
+  return waypointMap;
+}
+
+/**
  * Assigns column numbers to elements using a longest-path topological sort.
  * Used internally for pool-based layout.
  * @param {Array} elements
@@ -968,6 +1066,8 @@ ${flowLines.join('\n')}
     }
 
     // Flow edges within pool with orthogonal routing
+    // Step 1: compute initial waypoints for every flow in this pool
+    const poolFlowWaypoints = [];
     for (const flow of poolFlows) {
       let waypoints;
       if (flow.waypoints && Array.isArray(flow.waypoints) && flow.waypoints.length >= 2) {
@@ -980,11 +1080,20 @@ ${flowLines.join('\n')}
         const corner = flowCorners.get(flow.id) || 'right';
         waypoints = computeFlowWaypoints(srcPos, tgtPos, corner);
       }
+      poolFlowWaypoints.push({ id: flow.id, waypoints });
+    }
+
+    // Step 2: offset any overlapping parallel flow segments
+    const resolvedPoolWaypoints = resolveParallelFlowConflicts(poolFlowWaypoints);
+
+    // Step 3: build edge XML from the resolved waypoints
+    for (const { id: flowId } of poolFlowWaypoints) {
+      const waypoints = resolvedPoolWaypoints.get(flowId) || [];
       const waypointXml = waypoints
         .map(([x, y]) => `        <di:waypoint x="${x}" y="${y}" />`)
         .join('\n');
       diagramEdgeLines.push(
-        `      <bpmndi:BPMNEdge id="${escapeXml(flow.id)}_di" bpmnElement="${escapeXml(flow.id)}">
+        `      <bpmndi:BPMNEdge id="${escapeXml(flowId)}_di" bpmnElement="${escapeXml(flowId)}">
 ${waypointXml}
       </bpmndi:BPMNEdge>`
       );
@@ -1107,7 +1216,8 @@ function generate(data) {
   }
 
   // Build diagram edges XML with orthogonal routing
-  const edgeLines = flows.map((flow) => {
+  // Step 1: compute initial waypoints for every flow
+  const allFlowWaypoints = flows.map((flow) => {
     let waypoints;
     if (flow.waypoints && Array.isArray(flow.waypoints) && flow.waypoints.length >= 2) {
       // Use custom waypoints stored on the flow (e.g. from a previous modeler session)
@@ -1118,6 +1228,16 @@ function generate(data) {
       const corner = flowCorners.get(flow.id) || 'right';
       waypoints = computeFlowWaypoints(srcPos, tgtPos, corner);
     }
+    return { id: flow.id, waypoints };
+  });
+
+  // Step 2: offset any overlapping parallel flow segments so each occupies a
+  // distinct horizontal lane at least one task-height apart.
+  const resolvedWaypoints = resolveParallelFlowConflicts(allFlowWaypoints);
+
+  // Step 3: build edge XML from the resolved waypoints
+  const edgeLines = flows.map((flow) => {
+    const waypoints = resolvedWaypoints.get(flow.id) || [];
     const waypointXml = waypoints
       .map(([x, y]) => `        <di:waypoint x="${x}" y="${y}" />`)
       .join('\n');
